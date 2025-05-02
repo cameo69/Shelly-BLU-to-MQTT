@@ -42,13 +42,12 @@ let CONFIG = {
         "yet_another_address": "yet_another_topic"
     },
 };
-
-// END OF CHANGE
-
-// Convert all addresses to uppercase
+// Convertit les adresses en majuscules
 for (let key in CONFIG.shelly_blu_address) {
     CONFIG.shelly_blu_address[key.toUpperCase()] = CONFIG.shelly_blu_address[key];
 }
+
+// END OF CHANGE
 
 // MQTT publish function
 function mqtt_publish(topic, payload) {
@@ -111,6 +110,18 @@ BTH[0x21] = { n: "Motion", t: uint8 };
 BTH[0x2d] = { n: "Window", t: uint8 };
 BTH[0x3a] = { n: "Button", t: uint8 };
 
+// Specific to Shelly BLU RC Button 4
+const ACTION = {
+    0x00: "None",
+    0x01: "press",
+    0x02: "double_press",
+    0x03: "triple_press",
+    0x04: "long_press",
+    0x05: "long_double_press",
+    0x06: "long_triple_press",
+    0xFE: "hold_press",
+};
+
 let BTHomeDecoder = {
     utoi: function (num, bitsz) {
         let mask = 1 << (bitsz - 1);
@@ -148,19 +159,19 @@ let BTHomeDecoder = {
         return res;
     },
     unpack: function (buffer) {
-        // beacons might not provide BTH service data
         if (typeof buffer !== "string" || buffer.length === 0) return null;
         let result = {};
+        let tempButtons = [];
         let _dib = buffer.at(0);
         result["encryption"] = _dib & 0x1 ? true : false;
         result["BTHome_version"] = _dib >> 5;
         if (result["BTHome_version"] !== 2) return null;
-        //Can not handle encrypted data
         if (result["encryption"]) return result;
         buffer = buffer.slice(1);
-
+    
         let _bth;
         let _value;
+    
         while (buffer.length > 0) {
             _bth = BTH[buffer.at(0)];
             if (typeof _bth === "undefined") {
@@ -171,9 +182,28 @@ let BTHomeDecoder = {
             _value = this.getBufValue(_bth.t, buffer);
             if (_value === null) break;
             if (typeof _bth.f !== "undefined") _value = _value * _bth.f;
-            result[_bth.n] = _value;
+            console.log("BTH: ", _bth.n, _value);
+            
+            // Collecte de tous les boutons
+            if (_bth.n === "Button") {
+                tempButtons.push(_value);
+            } else {
+                result[_bth.n] = _value;
+            }
+            
             buffer = buffer.slice(getByteSize(_bth.t));
         }
+    
+        // Traitement des boutons selon leur nombre
+        if (tempButtons.length > 0) {
+            if (tempButtons.length === 1) {
+                // Lonely button
+                result.Button = tempButtons[0];
+            } else {
+                result.Buttons = tempButtons;
+            }
+        }
+        console.log("result: ", JSON.stringify(result));
         return result;
     },
 };
