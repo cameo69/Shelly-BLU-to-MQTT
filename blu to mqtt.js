@@ -110,6 +110,10 @@ BTH[0x21] = { n: "Motion", t: uint8 };
 BTH[0x2d] = { n: "Window", t: uint8 };
 BTH[0x3a] = { n: "Button", t: uint8 };
 
+// Shelly BLU Distance specific
+BTH[0x40] = { n: "Distance", t: uint16, u: "mm" };
+BTH[0x2c] = { n: "Vibration", t: uint8 };
+
 // Specific to Shelly BLU RC Button 4
 const ACTION = {
     0x00: "None",
