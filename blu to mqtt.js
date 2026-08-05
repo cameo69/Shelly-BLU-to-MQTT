@@ -252,6 +252,25 @@ BTH[0x21] = { n: "Motion", t: uint8 };
 BTH[0x2d] = { n: "Window", t: uint8 };
 BTH[0x3a] = { n: "Button", t: uint8 };
 
+// Shelly ECOWITT WS90 weather station specific
+// For id = 0x5f
+// 0x01 "Battery"     - defined above
+// 0x04 "Pressure"    - defined above
+// 0x08 "Dewpoint"    - defined above
+// 0x0c "Voltage"     - defined above
+// 0x2e "Humidity"    - defined above
+// 0x45 "Temperature" - defined above
+// For id = 0x44
+// 0x05 "Illuminance" - defined above
+// 0x20 "Moisture-Warn" - defined above
+BTH[0x44] = { n: "Wind-Speed", t: uint16, f: 0.01, u: "m/s" };
+BTH[0x46] = { n: "UV-Index", t: uint8, f: 0.1 };
+BTH[0x5e] = { n: "Wind-Direction", t: uint16, f: 0.01, u: "deg" };
+BTH[0x5f] = { n: "Precipitation", t: uint16, f: 0.1, u: "mm" };
+
+
+
+
 // Shelly BLU Distance specific
 BTH[0x40] = { n: "Distance", t: uint16, u: "mm" };
 BTH[0x2c] = { n: "Vibration", t: uint8 };
@@ -415,6 +434,7 @@ function scanCB(ev, res) {
     if (CONFIG.verbose_logs) console.log("Topic for the current address:", topic);
     // Publish the data
     if (CONFIG.verbose_logs) console.log("MQTT DBG: before mqtt_publish");
+    print("Publishing to MQTT topic:", topic, "with payload:", JSON.stringify(BTHparsed));
     mqtt_publish(topic, BTHparsed);
     if (CONFIG.verbose_logs) console.log("MQTT DBG: after mqtt_publish");
 
