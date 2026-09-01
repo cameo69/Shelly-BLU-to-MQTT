@@ -7,10 +7,14 @@ Allows BLU shellies to be used with MQTT.
 
 The script is designed to work with the following Shelly BLU devices:
 
-- SBBT - Shelly BLU Button
-- SBDW - Shelly BLU DoorWindow
+- Shelly BLU Button
+- Shelly BLU DoorWindow
+- Shelly BLU RC Button 4
+- Shelly BLU Distance
 
 It decodes the service data from these devices and publishes it on an MQTT broker. The script is configurable to match your specific needs.
+
+You can easily extend its capacities with the BLU docs (ex. https://shelly-api-docs.shelly.cloud/docs-ble/Devices/BLU/distance/), feel free to make a pull request to add your devices !
 
 ## Configuration
 

@@ -41,6 +41,7 @@ let CONFIG = {
         "another_address": "another_topic",
         "yet_another_address": "yet_another_topic"
     },
+    verbose_logs: false,
 };
 // Convertit les adresses en majuscules
 for (let key in CONFIG.shelly_blu_address) {
@@ -51,8 +52,15 @@ for (let key in CONFIG.shelly_blu_address) {
 
 // MQTT publish function
 function mqtt_publish(topic, payload) {
-    let message = JSON.stringify(payload);
-    MQTT.publish(topic, message, 0, false);
+    if (CONFIG.verbose_logs) console.log("MQTT DBG: publish topic=", topic);
+    try {
+        let message = JSON.stringify(payload);
+        if (CONFIG.verbose_logs) console.log("MQTT DBG: stringify ok, len=", message.length);
+        MQTT.publish(topic, message, 0, false);
+        if (CONFIG.verbose_logs) console.log("MQTT DBG: publish ok");
+    } catch (e) {
+        console.log("MQTT DBG ERR:", e);
+    }
 }
 
 let ALLTERCO_MFD_ID_STR = "0ba9";
@@ -76,6 +84,140 @@ function getByteSize(type) {
     if (type === uint24 || type === int24) return 3;
     //impossible as advertisements are much smaller;
     return 255;
+}
+
+function toHex(buffer) {
+    if (typeof buffer !== "string" || buffer.length === 0) return "";
+    let out = "";
+    for (let i = 0; i < buffer.length; i++) {
+        let h = buffer.at(i).toString(16);
+        if (h.length < 2) h = "0" + h;
+        out += h;
+    }
+    return out;
+}
+
+function toHexByte(num) {
+    let h = num.toString(16);
+    if (h.length < 2) h = "0" + h;
+    return h;
+}
+
+function logManufacturerData(manufacturerData) {
+    if (typeof manufacturerData === "undefined" || manufacturerData === null) return;
+    for (let mfdId in manufacturerData) {
+        let raw = manufacturerData[mfdId];
+        let hex = toHex(raw);
+        if (CONFIG.verbose_logs) {
+            console.log("manufacturer_data id=0x" + mfdId + " len=" + raw.length + " hex=" + hex);
+        }
+
+    }
+}
+
+function shouldIgnoreManufacturerData(manufacturerData) {
+    if (typeof manufacturerData === "undefined" || manufacturerData === null) return false;
+    return manufacturerData.hasOwnProperty("004c");
+}
+
+function inspectBTHPayload(buffer) {
+    if (typeof buffer !== "string" || buffer.length === 0) {
+        return { status: "missing" };
+    }
+
+    let _dib = buffer.at(0);
+    let version = _dib >> 5;
+    let encrypted = (_dib & 0x1) ? true : false;
+    let objects = [];
+    let unknownId = null;
+    buffer = buffer.slice(1);
+
+    while (buffer.length > 0) {
+        let objectId = buffer.at(0);
+        let _bth = BTH[objectId];
+        if (typeof _bth === "undefined") {
+            unknownId = objectId;
+            objects.push({ id: objectId, name: "UNKNOWN_BTH_OBJECT_ID" });
+            break;
+        }
+        objects.push({ id: objectId, name: _bth.n });
+        buffer = buffer.slice(1);
+        let size = getByteSize(_bth.t);
+        if (buffer.length < size) {
+            return {
+                status: "truncated",
+                version: version,
+                encrypted: encrypted,
+                objects: objects,
+            };
+        }
+        buffer = buffer.slice(size);
+    }
+
+    if (encrypted) {
+        return {
+            status: "encrypted",
+            version: version,
+            encrypted: encrypted,
+            objects: objects,
+        };
+    }
+
+    if (unknownId !== null) {
+        return {
+            status: "unknown_type",
+            version: version,
+            encrypted: encrypted,
+            objects: objects,
+            unknown_id: unknownId,
+        };
+    }
+
+    return {
+        status: "known",
+        version: version,
+        encrypted: encrypted,
+        objects: objects,
+    };
+}
+
+function formatManufacturerSummary(manufacturerData) {
+    if (typeof manufacturerData === "undefined" || manufacturerData === null) return "none";
+    let parts = [];
+    for (let mfdId in manufacturerData) {
+        let raw = manufacturerData[mfdId];
+        parts.push("0x" + mfdId + ":" + toHex(raw));
+    }
+    if (parts.length === 0) return "none";
+    return parts.join(" | ");
+}
+
+function formatBTHSummary(serviceData) {
+    if (
+        typeof serviceData === "undefined" ||
+        serviceData === null ||
+        typeof serviceData[BTHOME_SVC_ID_STR] === "undefined"
+    ) {
+        return "none";
+    }
+
+    let raw = serviceData[BTHOME_SVC_ID_STR];
+    let info = inspectBTHPayload(raw);
+    let knownObjects = "none";
+    if (typeof info.objects !== "undefined" && info.objects.length > 0) {
+        let objectParts = [];
+        for (let i = 0; i < info.objects.length; i++) {
+            let obj = info.objects[i];
+            objectParts.push(obj.name + "(0x" + toHexByte(obj.id) + ")");
+        }
+        knownObjects = objectParts.join(",");
+    }
+
+    let summary = "payload=" + toHex(raw) + " status=" + info.status + " objects=" + knownObjects;
+    if (typeof info.version !== "undefined") summary += " ver=" + info.version;
+    if (typeof info.encrypted !== "undefined") summary += " encrypted=" + (info.encrypted ? "1" : "0");
+    if (typeof info.unknown_id !== "undefined") summary += " unknown_id=0x" + toHexByte(info.unknown_id);
+    return summary;
 }
 
 let BTH = {};
@@ -109,6 +251,29 @@ BTH[0x1b] = { n: "Garage-Door", t: uint8 };
 BTH[0x21] = { n: "Motion", t: uint8 };
 BTH[0x2d] = { n: "Window", t: uint8 };
 BTH[0x3a] = { n: "Button", t: uint8 };
+
+// Shelly ECOWITT WS90 weather station specific
+// For id = 0x5f
+// 0x01 "Battery"     - defined above
+// 0x04 "Pressure"    - defined above
+// 0x08 "Dewpoint"    - defined above
+// 0x0c "Voltage"     - defined above
+// 0x2e "Humidity"    - defined above
+// 0x45 "Temperature" - defined above
+// For id = 0x44
+// 0x05 "Illuminance" - defined above
+// 0x20 "Moisture-Warn" - defined above
+BTH[0x44] = { n: "Wind-Speed", t: uint16, f: 0.01, u: "m/s" };
+BTH[0x46] = { n: "UV-Index", t: uint8, f: 0.1 };
+BTH[0x5e] = { n: "Wind-Direction", t: uint16, f: 0.01, u: "deg" };
+BTH[0x5f] = { n: "Precipitation", t: uint16, f: 0.1, u: "mm" };
+
+
+
+
+// Shelly BLU Distance specific
+BTH[0x40] = { n: "Distance", t: uint16, u: "mm" };
+BTH[0x2c] = { n: "Vibration", t: uint8 };
 
 // Specific to Shelly BLU RC Button 4
 const ACTION = {
@@ -175,14 +340,14 @@ let BTHomeDecoder = {
         while (buffer.length > 0) {
             _bth = BTH[buffer.at(0)];
             if (typeof _bth === "undefined") {
-                console.log("BTH: unknown type");
+                if (CONFIG.verbose_logs) console.log("BTH: unknown type");
                 break;
             }
             buffer = buffer.slice(1);
             _value = this.getBufValue(_bth.t, buffer);
             if (_value === null) break;
             if (typeof _bth.f !== "undefined") _value = _value * _bth.f;
-            console.log("BTH: ", _bth.n, _value);
+            if (CONFIG.verbose_logs) console.log("BTH: ", _bth.n, _value);
             
             // Collecte de tous les boutons
             if (_bth.n === "Button") {
@@ -203,7 +368,7 @@ let BTHomeDecoder = {
                 result.Buttons = tempButtons;
             }
         }
-        console.log("result: ", JSON.stringify(result));
+        if (CONFIG.verbose_logs) console.log("result: ", JSON.stringify(result));
         return result;
     },
 };
@@ -220,12 +385,27 @@ let ShellyBLUParser = {
 let last_packet_id = 0x100;
 function scanCB(ev, res) {
     if (ev !== BLE.Scanner.SCAN_RESULT) return;
-    // skip if there is no service_data member
+    if (shouldIgnoreManufacturerData(res.manufacturer_data)) {
+        if (CONFIG.verbose_logs) console.log("BLE adv ignored: manufacturer_data includes 0x004c");
+        return;
+    }
+    // Keep logs focused on BTHome traffic only.
     if (
         typeof res.service_data === "undefined" ||
         typeof res.service_data[BTHOME_SVC_ID_STR] === "undefined"
-    )
+    ) {
         return;
+    }
+    console.log(
+        "BLE adv addr=" + res.addr +
+        " rssi=" + res.rssi +
+        " mfd={" + formatManufacturerSummary(res.manufacturer_data) + "}" +
+        " bth={" + formatBTHSummary(res.service_data) + "}"
+    );
+    if (CONFIG.verbose_logs) {
+        logManufacturerData(res.manufacturer_data);
+        console.log("service_uuids:", res.service_uuids);
+    }
     // skip if we are looking for name match but don't have active scan as we don't have name
     if (
         typeof CONFIG.shelly_blu_name_prefix !== "undefined" &&
@@ -248,12 +428,15 @@ function scanCB(ev, res) {
     // skip, we are deduping results
     if (last_packet_id === BTHparsed.pid) return;
     last_packet_id = BTHparsed.pid;
-    console.log("Shelly BTH packet: ", JSON.stringify(BTHparsed));
+    console.log("Shelly BTH packet:", JSON.stringify(BTHparsed));
     // Get the topic for the current address
     let topic = CONFIG.shelly_blu_address[res.addr.toUpperCase()];
-    console.log("Topic for the current address: ", topic);
+    if (CONFIG.verbose_logs) console.log("Topic for the current address:", topic);
     // Publish the data
+    if (CONFIG.verbose_logs) console.log("MQTT DBG: before mqtt_publish");
+    print("Publishing to MQTT topic:", topic, "with payload:", JSON.stringify(BTHparsed));
     mqtt_publish(topic, BTHparsed);
+    if (CONFIG.verbose_logs) console.log("MQTT DBG: after mqtt_publish");
 
 }
 
